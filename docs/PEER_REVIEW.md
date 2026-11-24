@@ -3,7 +3,7 @@
 동료평가 때 **평가 항목과 내 과제의 해당 위치**를 바로 찾고, 질문에 답할 수 있도록 정리한 문서예요.
 
 - 평가 항목 번호(#1~#20)는 **AI 사전평가 항목 순서**를 따라요.
-- 1차 AI 사전평가 결과는 **95% (19/20)** 였어요. FAIL이었던 #19는 보완을 마쳤어요(2026-11-24). 보완 내용은 [5장](#5-ai-사전평가-반영-내역)에 있어요.
+- AI 사전평가: 1차 **95% (19/20)** → 2차 **100% (20/20)** (2026-11-24). 1차에서 FAIL이었던 #19는 보완해서 2차에 PASS를 받았어요. 내역은 [5장](#5-ai-사전평가-반영-내역)에 있어요.
 - 코드 링크의 줄 번호는 이 문서를 작성한 시점 기준이에요.
 - 관련 문서: [README](../README.md) · [실행 로그](RUN_LOG.md)
 - 🙋 **처음 배우는 분을 위한 쉬운 말 버전**: [PEER_REVIEW_EASY.md](PEER_REVIEW_EASY.md) (말하듯이 풀어 쓴 설명, 시연 대본, 용어 사전 포함)
@@ -19,28 +19,28 @@
 
 ## 1. 평가 항목 일대일 대응표
 
-| # | 평가 주제 | 1차 결과 → 보완 | 코드 위치 | 문서 위치 | 바로 보여줄 것 |
+| # | 평가 주제 | 1차 → 2차 | 코드 위치 | 문서 위치 | 바로 보여줄 것 |
 |---|---|---|---|---|---|
-| 1 | 모드 1: 3×3 필터 A/B·패턴 입력 → 점수·시간·판정 | PASS (+예시 표) | [`run_user_mode`](../main.py#L615), [`report_ab_judgement`](../main.py#L636) | README 1장 "모드 1 예시 출력" 표 | `python3 main.py` → `1` → 예시 입력 |
-| 2 | epsilon 기반 동점 정책 | PASS (+근거 주석) | [`EPSILON`](../main.py#L38), [`judge`](../main.py#L224) | README 3-4 | 코드 주석 L35~38 |
-| 3 | 입력 검증과 재입력 | PASS | [`parse_row`](../main.py#L524), [`read_matrix`](../main.py#L543) | README 3-5 표 | `1 1`, `abc 1 0`, 빈 줄 입력 |
-| 4 | data.json filters 로드 (size_N) | PASS | [`FILTER_KEY_RE`](../main.py#L65), [`load_filters`](../main.py#L363) | README 3-6 | 모드 2 "[1] 필터 로드" |
-| 5 | 라벨 정규화 구현 | PASS | [`LABEL_ALIASES`](../main.py#L58), [`normalize_label`](../main.py#L268) | README 3-3 매핑 표 | 매핑 표 |
-| 6 | 판정·PASS/FAIL 출력, UNDECIDED → FAIL | PASS | [`evaluate_case`](../main.py#L398), [출력부](../main.py#L673) | README 4-1 | 모드 2 "[2] 패턴 분석" |
-| 7 | 성능 표 (크기 / 평균 ms / N²) | PASS | [`benchmark`](../main.py#L468), [`print_bench_table`](../main.py#L477) | README 4-3 | 모드 2 "[3] 성능 분석" |
-| 8 | 결과 요약 (총/통과/실패 + 실패 목록) | PASS | [`print_summary`](../main.py#L723) | README 4-4 | 모드 2 "[4] 결과 요약" |
-| 9 | README 결과 리포트 (10줄 이상) | PASS | — | README 4장 전체 (4-1 ~ 4-5) | README 4장 |
-| 10 | MAC 연산 원리 | PASS (+Σ 수식) | [`mac`](../main.py#L173) | README 맨 위 수식, 3-2 | `mac()` 이중 반복문 |
-| 11 | 패턴 키에서 N 추출 → 필터 선택·크기 검증 | PASS | [`PATTERN_KEY_RE`](../main.py#L64), [`evaluate_case`](../main.py#L398) | README 3-6 | `--data tests/fixtures/bad_data.json` |
-| 12 | 라벨 정규화가 필요한 이유 | PASS (+확장 체크리스트) | [`normalize_label`](../main.py#L268) | README 3-3 "왜 정규화가 필요할까요?" | 아래 [Q12](#12-라벨-정규화가-필요한-이유) |
-| 13 | I/O를 뺀 시간 측정 | PASS (+GC 끄기) | [`measure_ms`](../main.py#L243) | README 3-7 | `measure_ms` 코드 |
-| 14 | MAC 점수 = 유사도 | PASS (+점수 읽는 법) | [`mac`](../main.py#L173) | README 맨 위 "점수 읽는 법" | Cross×Cross=5, Cross×X=1 |
-| 15 | 시간 복잡도 O(N²) | PASS (+이론·측정 비교표) | [`mac` 주석](../main.py#L173) | README 4-3 비교표 | 모드 2 성능표, 모드 5 |
-| 16 | 부동소수점 오차와 epsilon의 필요성 | PASS (+민감도 실험) | [`judge`](../main.py#L224) | README 4-2 "epsilon 민감도 실험" | 모드 1 동점 시연 |
-| 17 | 모드 1과 모드 2의 동점 처리 차이 | PASS (+비교표) | [`decision_text_ab`](../main.py#L605), [모드 2 출력부](../main.py#L673) | README 3-4 비교표 | 아래 [Q17](#17-모드-1과-모드-2의-동점-처리-차이) |
-| 18 | 새 라벨·요구사항이 바뀔 때의 대응 | PASS (+체크리스트) | [`LABEL_ALIASES`](../main.py#L58) | README 3-3 체크리스트 | 아래 [Q18](#18-새-라벨이-생기면) |
-| 19 | 대규모 N(1000×1000) 처리와 최적화 | **FAIL → 보완 완료** | [`mac_sparse`](../main.py#L205), [`REL_EPSILON`](../main.py#L42), [`_row_is_all_finite_numbers`](../main.py#L136), [모드 5](../main.py#L826) | README 4-5 | `python3 main.py` → `5` |
-| 20 | CPU 직렬 처리 vs NPU 병렬 처리, 병목 | PASS (+연산/메모리 병목 설명) | — | README 4-3 "AI/NPU 관점" | 아래 [Q20](#20-cpu와-npu의-차이와-병목) |
+| 1 | 모드 1: 3×3 필터 A/B·패턴 입력 → 점수·시간·판정 | PASS → PASS (+예시 표) | [`run_user_mode`](../main.py#L615), [`report_ab_judgement`](../main.py#L636) | README 1장 "모드 1 예시 출력" 표 | `python3 main.py` → `1` → 예시 입력 |
+| 2 | epsilon 기반 동점 정책 | PASS → PASS (+근거 주석) | [`EPSILON`](../main.py#L38), [`judge`](../main.py#L224) | README 3-4 | 코드 주석 L35~38 |
+| 3 | 입력 검증과 재입력 | PASS → PASS | [`parse_row`](../main.py#L524), [`read_matrix`](../main.py#L543) | README 3-5 표 | `1 1`, `abc 1 0`, 빈 줄 입력 |
+| 4 | data.json filters 로드 (size_N) | PASS → PASS | [`FILTER_KEY_RE`](../main.py#L65), [`load_filters`](../main.py#L363) | README 3-6 | 모드 2 "[1] 필터 로드" |
+| 5 | 라벨 정규화 구현 | PASS → PASS | [`LABEL_ALIASES`](../main.py#L58), [`normalize_label`](../main.py#L268) | README 3-3 매핑 표 | 매핑 표 |
+| 6 | 판정·PASS/FAIL 출력, UNDECIDED → FAIL | PASS → PASS | [`evaluate_case`](../main.py#L398), [출력부](../main.py#L673) | README 4-1 | 모드 2 "[2] 패턴 분석" |
+| 7 | 성능 표 (크기 / 평균 ms / N²) | PASS → PASS | [`benchmark`](../main.py#L468), [`print_bench_table`](../main.py#L477) | README 4-3 | 모드 2 "[3] 성능 분석" |
+| 8 | 결과 요약 (총/통과/실패 + 실패 목록) | PASS → PASS | [`print_summary`](../main.py#L723) | README 4-4 | 모드 2 "[4] 결과 요약" |
+| 9 | README 결과 리포트 (10줄 이상) | PASS → PASS | — | README 4장 전체 (4-1 ~ 4-5) | README 4장 |
+| 10 | MAC 연산 원리 | PASS → PASS (+Σ 수식) | [`mac`](../main.py#L173) | README 맨 위 수식, 3-2 | `mac()` 이중 반복문 |
+| 11 | 패턴 키에서 N 추출 → 필터 선택·크기 검증 | PASS → PASS | [`PATTERN_KEY_RE`](../main.py#L64), [`evaluate_case`](../main.py#L398) | README 3-6 | `--data tests/fixtures/bad_data.json` |
+| 12 | 라벨 정규화가 필요한 이유 | PASS → PASS (+확장 체크리스트) | [`normalize_label`](../main.py#L268) | README 3-3 "왜 정규화가 필요할까요?" | 아래 [Q12](#12-라벨-정규화가-필요한-이유) |
+| 13 | I/O를 뺀 시간 측정 | PASS → PASS (+GC 끄기) | [`measure_ms`](../main.py#L243) | README 3-7 | `measure_ms` 코드 |
+| 14 | MAC 점수 = 유사도 | PASS → PASS (+점수 읽는 법) | [`mac`](../main.py#L173) | README 맨 위 "점수 읽는 법" | Cross×Cross=5, Cross×X=1 |
+| 15 | 시간 복잡도 O(N²) | PASS → PASS (+이론·측정 비교표) | [`mac` 주석](../main.py#L173) | README 4-3 비교표 | 모드 2 성능표, 모드 5 |
+| 16 | 부동소수점 오차와 epsilon의 필요성 | PASS → PASS (+민감도 실험) | [`judge`](../main.py#L224) | README 4-2 "epsilon 민감도 실험" | 모드 1 동점 시연 |
+| 17 | 모드 1과 모드 2의 동점 처리 차이 | PASS → PASS (+비교표) | [`decision_text_ab`](../main.py#L605), [모드 2 출력부](../main.py#L673) | README 3-4 비교표 | 아래 [Q17](#17-모드-1과-모드-2의-동점-처리-차이) |
+| 18 | 새 라벨·요구사항이 바뀔 때의 대응 | PASS → PASS (+체크리스트) | [`LABEL_ALIASES`](../main.py#L58) | README 3-3 체크리스트 | 아래 [Q18](#18-새-라벨이-생기면) |
+| 19 | 대규모 N(1000×1000) 처리와 최적화 | **FAIL → PASS** | [`mac_sparse`](../main.py#L205), [`REL_EPSILON`](../main.py#L42), [`_row_is_all_finite_numbers`](../main.py#L136), [모드 5](../main.py#L826) | README 4-5 | `python3 main.py` → `5` |
+| 20 | CPU 직렬 처리 vs NPU 병렬 처리, 병목 | PASS → PASS (+연산/메모리 병목 설명) | — | README 4-3 "AI/NPU 관점" | 아래 [Q20](#20-cpu와-npu의-차이와-병목) |
 
 ---
 
@@ -151,7 +151,7 @@ README 3-4에 비교표가 있어요.
 
 체크리스트는 README 3-3에 있어요.
 
-### 19. 대규모 N (보완 항목)
+### 19. 대규모 N (1차 FAIL → 2차 PASS)
 **Q. 1000×1000이면 어떻게 되나요?**
 모드 5로 직접 측정했어요. MAC 1회는 41.6ms, 행렬 1개는 32.9MB였어요. 문제는 세 가지였고, 각각 이렇게 대응했어요.
 
@@ -205,7 +205,7 @@ git log --oneline                                     # 커밋 이력
 
 ## 5. AI 사전평가 반영 내역
 
-**1차: 95% (19/20)**, 2026-11-24 18:03
+**1차: 95% (19/20)**, 2026-11-24 18:03 → 아래 내용을 보완한 뒤 **2차: 100% (20/20)**, 2026-11-24 18:26
 
 | # | 지적 내용 | 반영 |
 |---|---|---|
@@ -222,3 +222,16 @@ git log --oneline                                     # 커밋 이력
 | 17 | 모드 1과 모드 2의 동점 처리 비교표 | README 3-4 비교표 |
 | 20 | CPU와 NPU의 병목(메모리/연산) 구체 예시 | README 4-3 "AI/NPU 관점" |
 | 7, 8 | CSV 내보내기, 카테고리 정렬 출력 | 반영하지 않았어요. 과제 범위 밖이고, 실패 분류 집계는 이미 출력하고 있어요 |
+
+### 2차 평가에서 나온 추가 제안 (모두 PASS 상태의 선택 사항)
+
+2차에서는 모든 항목이 PASS였어요. 아래는 "더 하면 좋다"는 제안이고, 과제 요구사항에는 들어가지 않아서 반영하지 않았어요. 동료평가 때 질문이 나오면 이렇게 답하면 돼요.
+
+| # | 제안 | 반영하지 않은 이유 / 답변 |
+|---|---|---|
+| 19 | C 확장이나 NumPy 최적화 실험 | 과제 조건이 **외부 라이브러리 금지**예요. 그래서 표준 라이브러리 안에서 할 수 있는 최적화(희소 MAC, `array`)까지만 했어요 |
+| 7 | 표준편차 열 추가 | 과제 기준은 "10회 평균"이에요. 흔들림은 README 3-7에 적어 뒀고(10~20%), 결론은 비율과 추세로 냈어요 |
+| 8, 9 | 요약을 JSON/CSV 파일로 저장, 리포트 자동 생성 | 과제 출력 대상은 콘솔이에요. 실행 결과는 RUN_LOG에 그대로 남겼어요 |
+| 16 | 명령행에서 epsilon 조정 | 과제 정책이 1e-9로 정해져 있어요. 민감도는 README 4-2 실험표로 대신 보여 줘요 |
+| 15 | a, c 자동 추정 함수 | README 4-3에서 측정값 두 개로 직접 풀어서 보여 줬어요 |
+| 1, 3, 4, 6, 10~14, 17, 18, 20 | 예시나 문구 한 줄 추가 (음수 입력 예시, 요약에 epsilon 표시 등) | 기능은 이미 동작해요. 예를 들어 음수와 소수 입력은 `parse_row`가 `float()`로 받기 때문에 그대로 돼요 |
