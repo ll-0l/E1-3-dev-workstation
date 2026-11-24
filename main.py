@@ -15,12 +15,15 @@ AI 가속기(NPU)의 핵심 연산인 MAC(Multiply-Accumulate)을 반복문으�
 from __future__ import annotations
 
 import argparse
+import array
+import gc
 import json
 import math
 import os
 import re
 import sys
 import time
+import tracemalloc
 import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -29,12 +32,22 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 # 1. 상수 / 정책
 # ============================================================
 
-EPSILON = 1e-9          # 점수 비교 허용오차: |a - b| < EPSILON 이면 동점
+# 점수 비교 허용오차: |a - b| < EPSILON 이면 동점 (과제 권장 기준)
+# 근거: data.json의 계산 오차는 1e-16 ~ 3e-15, 진짜 점수 차이는 0.1 이상이라 1e-9는 그 사이에 넉넉히 들어감.
+#       실험(README 4-2)상 1e-12 ~ 1 사이 어떤 값이든 결과가 같고, 1e-15 이하면 오차를 못 거름.
+EPSILON = 1e-9
+# 상대 허용오차 (대규모 N 전용 옵션, 기본 판정에는 쓰지 않음):
+# 덧셈을 N²번 하면 오차도 커져서(1000×1000에서 약 1e-6) 고정 1e-9로는 진짜 동점을 못 잡음.
+# 점수 크기에 비례하는 허용치 rel × max(|a|, |b|)를 함께 쓰면 N과 상관없이 동점을 잡을 수 있음.
+REL_EPSILON = 1e-9
 REPEAT = 10             # 성능 측정 반복 횟수 (과제 최소 기준 10회)
 BONUS_REPEAT = 100      # 보너스 2D/1D 비교 반복 횟수 (두 방식에 똑같이 적용, 잡음을 줄이려고 10회보다 크게)
 BENCH_SIZES = (3, 5, 13, 25)              # 필수 성능 분석 크기
 BONUS_SIZES = (3, 5, 13, 25, 50, 100)     # 보너스 최적화 비교 크기
-MAX_GENERATOR_SIZE = 200                  # 생성기에서 받을 수 있는 최대 N
+# 생성기에서 받을 수 있는 최대 N. 1000×1000에서 MAC 1회 ≈ 40ms, 행렬 1개 ≈ 8~32MB.
+# 모드 3은 MAC을 50번 정도 하므로 1000이면 약 2초. 그 이상은 기다림이 길어져서 막아 둠.
+MAX_GENERATOR_SIZE = 1000
+LARGE_SIZES = (100, 250, 500, 1000)       # 모드 5 대규모 실험 크기
 
 LABEL_CROSS = "Cross"   # 프로그램 내부 표준 라벨
 LABEL_X = "X"
@@ -87,9 +100,9 @@ class Matrix:
         """2차원 리스트를 검증한 뒤 Matrix로 만듭니다. 문제가 있으면 ValueError."""
         validate_square_rows(rows, expected_size)
         matrix = cls(len(rows))  # type: ignore[arg-type]
-        for r, row in enumerate(rows):  # type: ignore[arg-type]
-            for c, value in enumerate(row):
-                matrix.set(r, c, value)
+        # 칸마다 set()을 부르면 1000×1000에서 메서드 호출만 100만 번이라 느려서(약 290ms),
+        # 검증이 끝난 행을 한 번에 float 리스트로 복사합니다(원본 리스트와 공유하지 않음).
+        matrix._rows = [[float(value) for value in row] for row in rows]  # type: ignore[union-attr]
         return matrix
 
     def get(self, row: int, col: int) -> float:
@@ -120,6 +133,20 @@ def _is_number(value: object) -> bool:
     return math.isfinite(value)
 
 
+def _row_is_all_finite_numbers(row: List[object]) -> bool:
+    """행 단위 빠른 검사: 타입이 int/float뿐이고(bool 제외) 합이 유한하면 모든 칸이 유한한 숫자.
+
+    1000×1000에서 칸별 검사(약 205ms)를 C로 구현된 내장 함수(set, map, fsum)로 줄이기 위한 것.
+    NaN/inf가 하나라도 있으면 fsum 결과가 유한하지 않으므로 False → 칸별 검사로 넘어갑니다.
+    """
+    if not set(map(type, row)) <= {int, float}:
+        return False
+    try:
+        return math.isfinite(math.fsum(row))  # type: ignore[arg-type]
+    except (OverflowError, ValueError):
+        return False   # 아주 큰 값끼리 더해 넘친 경우 등은 칸별 검사로 다시 판단
+
+
 def validate_square_rows(rows: object, expected_size: Optional[int] = None) -> None:
     """rows가 '숫자만 들어 있는 정사각 2차원 리스트'인지 검사합니다."""
     if not isinstance(rows, list) or not rows:
@@ -132,7 +159,9 @@ def validate_square_rows(rows: object, expected_size: Optional[int] = None) -> N
             raise ValueError(f"{r}번째 행이 리스트가 아닙니다")
         if len(row) != n:
             raise ValueError(f"열 수 불일치: {r}번째 행이 {len(row)}열입니다 ({n}×{n} 정사각 행렬이어야 함)")
-        for c, value in enumerate(row, start=1):
+        if _row_is_all_finite_numbers(row):
+            continue   # 빠른 경로: 행 전체가 정상이면 칸별 검사를 건너뜀
+        for c, value in enumerate(row, start=1):   # 느린 경로: 문제 칸의 정확한 위치를 찾음
             if not _is_number(value):
                 raise ValueError(f"숫자가 아닌 값: ({r}행, {c}열) = {value!r}")
 
@@ -173,13 +202,35 @@ def mac_flat(pattern_flat: Sequence[float], filter_flat: Sequence[float]) -> flo
     return total
 
 
-def judge(score_a: float, score_b: float, epsilon: float = EPSILON) -> str:
+def mac_sparse(pattern: Matrix, entries: Sequence[Tuple[int, int, float]]) -> float:
+    """희소(Sparse) MAC (대규모 N 최적화). 필터에서 0이 아닌 칸만 곱해서 더합니다.
+
+    0인 칸은 곱해도 0이라 점수에 영향이 없으므로 건너뜁니다(입력은 유한한 숫자만 허용).
+    entries를 행 우선 순서로 만들기 때문에 결과가 mac()과 비트 단위까지 같습니다.
+    비용: O(N²) → O(K), K = 필터의 0이 아닌 칸 수 (N×N Cross 필터는 K = 2N-1).
+    """
+    rows = pattern.rows()
+    total = 0.0
+    for r, c, weight in entries:
+        total += rows[r][c] * weight
+    return total
+
+
+def nonzero_entries(filt: Matrix) -> List[Tuple[int, int, float]]:
+    """필터에서 0이 아닌 칸의 (행, 열, 값) 목록. 필터는 한 번만 훑어 두고 계속 재사용합니다."""
+    return [(r, c, filt.get(r, c)) for r in range(filt.size) for c in range(filt.size) if filt.get(r, c) != 0.0]
+
+
+def judge(score_a: float, score_b: float, epsilon: float = EPSILON, rel_epsilon: float = 0.0) -> str:
     """두 점수를 허용오차 기반으로 비교해 'A' / 'B' / UNDECIDED 를 돌려줍니다.
 
     부동소수점은 0.1 같은 수를 정확히 표현하지 못해 0.9 와 0.8999999999999999 처럼
     '사실상 같은 값'이 다르게 계산될 수 있으므로 == 나 > 를 그대로 쓰지 않습니다.
+    기본(rel_epsilon=0)은 과제 기준 그대로 |a-b| < epsilon 입니다.
+    rel_epsilon을 주면 허용치를 max(epsilon, rel_epsilon × max(|a|, |b|))로 넓힙니다(대규모 N용).
     """
-    if abs(score_a - score_b) < epsilon:
+    tolerance = max(epsilon, rel_epsilon * max(abs(score_a), abs(score_b)))
+    if abs(score_a - score_b) < tolerance:
         return UNDECIDED
     return "A" if score_a > score_b else "B"
 
@@ -190,14 +241,23 @@ def format_epsilon(epsilon: float) -> str:
 
 
 def measure_ms(func: Callable[..., object], *args: object, repeat: int = REPEAT) -> float:
-    """func(*args)를 repeat번 호출한 1회 평균 시간(ms). 입출력은 측정 구간에 넣지 않습니다."""
+    """func(*args)를 repeat번 호출한 1회 평균 시간(ms). 입출력은 측정 구간에 넣지 않습니다.
+
+    측정하는 동안에는 가비지 컬렉터(GC)를 잠시 꺼서, 측정 중간에 GC가 끼어드는 잡음을 줄입니다.
+    """
     if repeat < 1:
         raise ValueError("repeat는 1 이상이어야 합니다")
-    total = 0.0
-    for _ in range(repeat):
-        start = time.perf_counter()
-        func(*args)
-        total += time.perf_counter() - start
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        total = 0.0
+        for _ in range(repeat):
+            start = time.perf_counter()
+            func(*args)
+            total += time.perf_counter() - start
+    finally:
+        if gc_was_enabled:
+            gc.enable()
     return total / repeat * 1000.0
 
 
@@ -728,7 +788,98 @@ def run_optimization_mode() -> None:
 
 
 # ============================================================
-# 14. 메인 메뉴
+# 14. 모드 5 (보너스+): 대규모 N 처리 실험
+# ============================================================
+
+def measure_memory_mb(build: Callable[[], object]) -> float:
+    """build()가 만든 객체가 차지하는 메모리(MB). 표준 라이브러리 tracemalloc으로 잽니다."""
+    gc.collect()
+    tracemalloc.start()
+    try:
+        obj = build()
+        current, _ = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    del obj
+    return current / 1e6
+
+
+def distinct_value_rows(n: int) -> List[List[float]]:
+    """칸마다 서로 다른 float 객체를 가진 N×N 리스트 (JSON에서 읽은 실제 데이터와 같은 상태)."""
+    return [[(r * n + c) % 7 / 10 for c in range(n)] for r in range(n)]
+
+
+@dataclass
+class LargeRow:
+    size: int
+    mem_list_mb: float     # 리스트의 리스트 (값마다 float 객체)
+    mem_array_mb: float    # array('d') 1차원 (값을 8바이트씩 연속 저장)
+    ms_dense: float        # 일반 MAC (N² 곱셈)
+    ms_sparse: float       # 희소 MAC (0 아닌 칸만)
+    nonzero: int
+    same_result: bool
+    abs_tie: str           # 진짜 동점(0.1 × N² vs 정확값)을 절대 epsilon으로 판정한 결과
+    rel_tie: str           # 같은 비교를 상대 epsilon까지 써서 판정한 결과
+    accum_error: float     # 0.1을 N²번 더했을 때 쌓인 오차
+
+
+def large_scale_experiment(sizes: Sequence[int] = LARGE_SIZES, repeat: int = REPEAT) -> List[LargeRow]:
+    rows = []
+    for n in sizes:
+        mem_list = measure_memory_mb(lambda: distinct_value_rows(n))
+        mem_array = measure_memory_mb(lambda: array.array("d", (v for row in distinct_value_rows(n) for v in row)))
+
+        pattern, filt = make_cross(n), make_cross(n)
+        entries = nonzero_entries(filt)
+        ms_dense = measure_ms(mac, pattern, filt, repeat=repeat)
+        ms_sparse = measure_ms(mac_sparse, pattern, entries, repeat=repeat)
+        same = mac(pattern, filt) == mac_sparse(pattern, entries)
+
+        # 정밀도: 모든 칸이 1인 패턴 × 모든 칸이 0.1인 필터 = 수학적으로 정확히 N²/10
+        ones = Matrix(n, 1.0)
+        tenths = Matrix(n, 0.1)
+        score = mac(ones, tenths)
+        exact = n * n / 10
+        rows.append(LargeRow(n, mem_list, mem_array, ms_dense, ms_sparse, len(entries), same,
+                             judge(score, exact), judge(score, exact, rel_epsilon=REL_EPSILON),
+                             abs(score - exact)))
+    return rows
+
+
+def run_large_mode() -> None:
+    section(f"대규모 N 처리 실험 (평균/{REPEAT}회)")
+    print("측정 중... (1000×1000 포함, 수 초 걸릴 수 있어요)")
+    rows = large_scale_experiment()
+
+    print("\n[1] 메모리: 행렬 1개 (칸마다 다른 값)")
+    print(pad("크기", 12) + pad("칸 수", 10, ">") + pad("리스트(MB)", 13, ">") + pad("array(MB)", 12, ">") + pad("절약", 8, ">"))
+    print("-" * 55)
+    for r in rows:
+        print(pad(f"{r.size}×{r.size}", 12) + pad(r.size * r.size, 10, ">") + pad(f"{r.mem_list_mb:.2f}", 13, ">")
+              + pad(f"{r.mem_array_mb:.2f}", 12, ">") + pad(f"{r.mem_list_mb / r.mem_array_mb:.1f}배", 8, ">"))
+
+    print("\n[2] 시간: 일반 MAC(N²) vs 희소 MAC(0 아닌 칸만) — Cross 패턴 × Cross 필터")
+    print(pad("크기", 12) + pad("일반(ms)", 11, ">") + pad("0 아닌 칸", 11, ">") + pad("희소(ms)", 11, ">")
+          + pad("빨라짐", 10, ">") + "  결과 일치")
+    print("-" * 66)
+    for r in rows:
+        speedup = r.ms_dense / r.ms_sparse if r.ms_sparse > 0 else float("inf")
+        print(pad(f"{r.size}×{r.size}", 12) + pad(f"{r.ms_dense:.3f}", 11, ">") + pad(r.nonzero, 11, ">")
+              + pad(f"{r.ms_sparse:.4f}", 11, ">") + pad(f"{speedup:.0f}배", 10, ">")
+              + "  " + ("✓" if r.same_result else "✗"))
+
+    print(f"\n[3] 정밀도: 진짜 동점(1 × 0.1을 N²번 더한 값 vs 정확값 N²/10)을 동점으로 잡는가")
+    print(pad("크기", 12) + pad("쌓인 오차", 12, ">") + pad(f"절대 {format_epsilon(EPSILON)}", 14, ">")
+          + pad(f"+상대 {format_epsilon(REL_EPSILON)}", 15, ">"))
+    print("-" * 53)
+    for r in rows:
+        print(pad(f"{r.size}×{r.size}", 12) + pad(f"{r.accum_error:.1e}", 12, ">")
+              + pad(r.abs_tie, 14, ">") + pad(r.rel_tie, 15, ">"))
+    print("UNDECIDED = 동점으로 올바르게 처리, A/B = 오차 때문에 잘못 승부가 남")
+
+
+# ============================================================
+# 15. 메인 메뉴
 # ============================================================
 
 MENU = """
@@ -737,6 +888,7 @@ MENU = """
 2. data.json 분석
 3. 패턴 생성기 (보너스)
 4. 최적화 비교: 2차원 vs 1차원 (보너스)
+5. 대규모 N 처리 실험: 메모리/희소 MAC/정밀도 (보너스)
 0. 종료"""
 
 
@@ -749,7 +901,7 @@ def main(argv: Optional[Sequence[str]] = None, input_fn: InputFunc = input) -> i
     try:
         while True:
             print(MENU)
-            choice = read_int("선택: ", 0, 4, input_fn)
+            choice = read_int("선택: ", 0, 5, input_fn)
             if choice == 0:
                 print("프로그램을 종료합니다.")
                 return 0
@@ -759,8 +911,10 @@ def main(argv: Optional[Sequence[str]] = None, input_fn: InputFunc = input) -> i
                 run_json_mode(args.data)
             elif choice == 3:
                 run_generator_mode(input_fn)
-            else:
+            elif choice == 4:
                 run_optimization_mode()
+            else:
+                run_large_mode()
     except InputAborted:
         print("\n입력이 종료되어 프로그램을 마칩니다.")
         return 0
