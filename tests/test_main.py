@@ -66,6 +66,23 @@ class MatrixTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             main.Matrix.from_rows([])
 
+    def test_fast_validation_keeps_exact_errors(self):
+        # 행 단위 빠른 검사가 놓치면 안 되는 값들: NaN, inf, bool, 문자열
+        for bad, where in (([[0, float("nan")], [0, 1]], "(1행, 2열)"),
+                           ([[0, 1], [float("inf"), 1]], "(2행, 1열)"),
+                           ([[1, 0], [0, False]], "(2행, 2열)")):
+            with self.assertRaises(ValueError) as ctx:
+                main.Matrix.from_rows(bad)
+            self.assertIn(where, str(ctx.exception))
+        # 각각은 유한한데 더하면 넘치는 값은 정상으로 받아야 함
+        self.assertEqual(main.Matrix.from_rows([[1e308, 1e308], [0, 1]]).get(0, 1), 1e308)
+
+    def test_from_rows_copies(self):
+        rows = [[1, 2], [3, 4]]
+        m = main.Matrix.from_rows(rows)
+        rows[0][0] = 99
+        self.assertEqual(m.get(0, 0), 1.0)
+
     def test_flat_is_row_major(self):
         m = main.Matrix.from_rows([[1, 2], [3, 4]])
         self.assertEqual(m.to_flat(), [1.0, 2.0, 3.0, 4.0])
@@ -94,6 +111,37 @@ class MacTest(unittest.TestCase):
         score = main.mac(p, f)
         self.assertNotEqual(score, 0.9)
         self.assertEqual(main.judge(score, 0.9), main.UNDECIDED)
+
+
+class LargeScaleTest(unittest.TestCase):
+    def test_sparse_matches_dense_exactly(self):
+        with open(os.path.join(ROOT, "data.json"), encoding="utf-8") as fp:
+            import json
+            data = json.load(fp)
+        for n in (5, 13, 25):
+            for label in ("cross", "x"):
+                filt = main.Matrix.from_rows(data["filters"][f"size_{n}"][label])
+                entries = main.nonzero_entries(filt)
+                for idx in (1, 2):
+                    pattern = main.Matrix.from_rows(data["patterns"][f"size_{n}_{idx}"]["input"])
+                    self.assertEqual(main.mac(pattern, filt), main.mac_sparse(pattern, entries))
+
+    def test_nonzero_count_of_cross(self):
+        self.assertEqual(len(main.nonzero_entries(main.make_cross(101))), 2 * 101 - 1)
+
+    def test_relative_epsilon_catches_large_ties(self):
+        n = 300
+        score = main.mac(main.Matrix(n, 1.0), main.Matrix(n, 0.1))   # 수학적으로 9000
+        self.assertNotEqual(main.judge(score, n * n / 10), main.UNDECIDED)   # 절대 1e-9로는 놓침
+        self.assertEqual(main.judge(score, n * n / 10, rel_epsilon=main.REL_EPSILON), main.UNDECIDED)
+        self.assertEqual(main.judge(9000.0, 9001.0, rel_epsilon=main.REL_EPSILON), "B")  # 진짜 차이는 유지
+
+    def test_experiment_small(self):
+        rows = main.large_scale_experiment(sizes=(10, 30), repeat=2)
+        for r in rows:
+            self.assertTrue(r.same_result)
+            self.assertEqual(r.rel_tie, main.UNDECIDED)
+            self.assertGreater(r.mem_list_mb, r.mem_array_mb)
 
 
 class JudgeTest(unittest.TestCase):
@@ -220,12 +268,13 @@ class FlowTest(unittest.TestCase):
         self.assertIn("판정: 판정 불가 (|A-B| < 1e-9)", out)
 
     def test_bonus_modes_and_eof(self):
-        code, out = quiet(main.main, [], fake_input(["3", "7", "4"]))   # 생성기 → 최적화 → EOF
+        code, out = quiet(main.main, [], fake_input(["3", "7", "4", "6"]))   # 생성기 → 최적화 → 범위 밖 → EOF
         self.assertEqual(code, 0)
         self.assertIn("표준 라벨 판정: Cross (정상)", out)
         self.assertIn("표준 라벨 판정: X (정상)", out)
         self.assertIn("100×100", out)
         self.assertNotIn("✗", out)
+        self.assertIn("0~5 사이의 숫자를 입력하세요.", out)
         self.assertIn("입력이 종료되어", out)
 
     def test_benchmark_table(self):
